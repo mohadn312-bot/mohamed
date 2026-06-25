@@ -77,7 +77,6 @@
             display: none;
             margin-top: 10px;
         }
-        .btn-whatsapp:hover { background-color: #128C7E; }
 
         table { width: 100%; border-collapse: collapse; margin-top: 15px; }
         th, td { padding: 10px; text-align: right; border-bottom: 1px solid #45475a; font-size: 14px; }
@@ -90,7 +89,6 @@
 
 <div class="container">
     
-    <!-- نموذج تسجيل الدخول -->
     <div id="loginSection" class="card">
         <h1>تسجيل دخول الموظف 👤</h1>
         <div class="form-group">
@@ -100,7 +98,6 @@
         </div>
     </div>
 
-    <!-- لوحة الموظف بعد الدخول -->
     <div id="dashboardSection" class="card hidden">
         <h1 id="welcomeMessage">مرحباً</h1>
         
@@ -123,7 +120,6 @@
             <input type="number" id="expenseAmount" placeholder="المبلغ المطلوب صرفه">
             <button onclick="processExpense()" style="background-color: #fab387;">تأكيد الصرف</button>
             
-            <!-- زر واتساب للإرسال السريع عند الصرف الخارجي أو انتهاء العهدة -->
             <a id="whatsappBtn" href="#" target="_blank" class="btn-whatsapp">📲 إرسال الفاتورة للمدير عبر WhatsApp</a>
             
             <button class="logout-btn" onclick="logout()">تسجيل الخروج</button>
@@ -148,33 +144,51 @@
 </div>
 
 <script>
-    let employees = [];
-    let currentEmpIndex = null;
+    const dbUrl = "https://mohamed-38770-default-rtdb.firebaseio.com";
+    let currentEmpId = null;
+    let currentEmpData = null;
 
-    function loadEmployees() {
-        employees = JSON.parse(localStorage.getItem('employees')) || [];
-    }
-
-    function login() {
-        loadEmployees();
+    async function login() {
         const name = document.getElementById('loginName').value.trim();
         const pass = document.getElementById('loginPass').value.trim();
 
-        const index = employees.findIndex(e => e.name === name && e.pass === pass);
+        try {
+            const res = await fetch(`${dbUrl}/employees.json`);
+            const employees = await res.json() || {};
 
-        if (index !== -1) {
-            currentEmpIndex = index;
-            document.getElementById('loginSection').classList.add('hidden');
-            document.getElementById('dashboardSection').classList.remove('hidden');
-            updateDashboard();
-        } else {
-            alert('اسم المستخدم أو كلمة المرور غير صحيحة!');
+            let foundId = null;
+            for (let id in employees) {
+                if (employees[id].name === name && employees[id].pass === pass) {
+                    foundId = id;
+                    currentEmpData = employees[id];
+                    break;
+                }
+            }
+
+            if (foundId) {
+                currentEmpId = foundId;
+                document.getElementById('loginSection').classList.add('hidden');
+                document.getElementById('dashboardSection').classList.remove('hidden');
+                updateDashboard();
+                // تحديث مستمر كل 7 ثواني لو رصيده زاد يظهر فورا
+                setInterval(updateDashboard, 7000);
+            } else {
+                alert('اسم المستخدم أو كلمة المرور غير صحيحة!');
+            }
+        } catch (error) {
+            alert('حدث خطأ في الاتصال بقاعدة البيانات!');
         }
     }
 
-    function updateDashboard() {
-        loadEmployees();
-        const emp = employees[currentEmpIndex];
+    async function updateDashboard() {
+        if(!currentEmpId) return;
+        
+        try {
+            const res = await fetch(`${dbUrl}/employees/${currentEmpId}.json`);
+            currentEmpData = await res.json();
+        } catch(e) {}
+
+        const emp = currentEmpData;
         document.getElementById('welcomeMessage').innerText = `مرحباً، ${emp.name} 👋`;
         document.getElementById('currentBalance').innerText = `${emp.budget} نقطة`;
         
@@ -191,10 +205,10 @@
         
         let totalSpent = 0;
 
-        if (!emp.expenses || emp.expenses.length === 0) {
+        if (!emp.expenses) {
             tbody.innerHTML = '<tr><td colspan="4" style="text-align:center; color:#a6adc8;">لم تقم بتسجيل أي مصروفات بعد.</td></tr>';
         } else {
-            emp.expenses.forEach(exp => {
+            Object.values(emp.expenses).forEach(exp => {
                 totalSpent += exp.amount;
                 tbody.innerHTML += `
                     <tr>
@@ -215,9 +229,7 @@
         }
     }
 
-    function processExpense() {
-        loadEmployees();
-        let emp = employees[currentEmpIndex];
+    async function processExpense() {
         const category = document.getElementById('expenseCategory').value;
         const reason = document.getElementById('expenseReason').value.trim();
         const amount = parseFloat(document.getElementById('expenseAmount').value);
@@ -227,56 +239,53 @@
             return;
         }
 
-        if(!emp.expenses) emp.expenses = [];
-
-        let notifications = JSON.parse(localStorage.getItem('notifications')) || [];
         let timeNow = new Date().toLocaleString('ar-EG');
+        const newExpense = { category, reason, amount, time: timeNow };
 
-        emp.expenses.unshift({ category: category, reason: reason, amount: amount, time: timeNow });
-
+        let updatedBudget = currentEmpData.budget;
         let waMessage = "";
+        let notifText = "";
+        let notifType = "finished";
 
-        if (emp.budget <= 0) {
-            emp.budget -= amount;
-            waMessage = `🚨 طلب تعويض مالي عاجل\nالموظف: ${emp.name}\nصرف من جيبه مبلغ: ${amount} نقطة\nالبند: ${category}\nالسبب: ${reason}\nالوقت: ${timeNow}\nيرجى تحويل المبلغ لتجديد الرصيد.`;
-            notifications.unshift({
-                type: 'overdraft',
-                text: `🚨 تنبيه: الموظف [${emp.name}] قام بدفع مبلغ وقدره (${amount}) من حسابه الشخصي لبند [${category}] لغرض: ${reason}. يرجى تحويل المبلغ له.`,
-                time: timeNow
-            });
-            alert('تم تسجيل المبلغ بالسالب وإرسال طلب تعويض للشركة لمراجعته.');
-        } 
-        else {
-            if (amount > emp.budget) {
-                let remainingFromPocket = amount - emp.budget;
-                emp.budget = 0;
-                waMessage = `⚠️ انتهت العُهدة وصرف زيادة\nالموظف: ${emp.name}\nالرصيد خلص، وصرف مديونية من جيبه بقيمة: ${remainingFromPocket} نقطة\nالبند: ${category}\nالسبب: ${reason}`;
-                notifications.unshift({
-                    type: 'finished',
-                    text: `⚠️ انتهت عُهدة الموظف [${emp.name}]. وصرف زيادة من جيبه بقيمة (${remainingFromPocket}) لبند [${category}] لغرض: ${reason}. يرجى تحويل الزيادة.`,
-                    time: timeNow
-                });
-                alert('تم استهلاك كامل الرصيد، وتم إشعار الشركة بالزيادة المصروفة.');
+        if (updatedBudget <= 0) {
+            updatedBudget -= amount;
+            waMessage = `🚨 طلب تعويض مالي عاجل\nالموظف: ${currentEmpData.name}\nصرف من جيبه مبلغ: ${amount} نقطة\nالبند: ${category}\nالسبب: ${reason}`;
+            notifText = `🚨 تنبيه: الموظف [${currentEmpData.name}] قام بدفع مبلغ وقدره (${amount}) من حسابه الشخصي لبند [${category}] لغرض: ${reason}.`;
+            notifType = "overdraft";
+        } else {
+            if (amount > updatedBudget) {
+                let remainingFromPocket = amount - updatedBudget;
+                updatedBudget = 0;
+                waMessage = `⚠️ انتهت العُهدة وصرف زيادة\nالموظف: ${currentEmpData.name}\nصرف زيادة بقيمة: ${remainingFromPocket} نقطة\nالبند: ${category}`;
+                notifText = `⚠️ انتهت عُهدة الموظف [${currentEmpData.name}]. وصرف زيادة من جيبه بقيمة (${remainingFromPocket}) لبند [${category}].`;
             } else {
-                emp.budget -= amount;
-                if (emp.budget === 0) {
-                    notifications.unshift({
-                        type: 'finished',
-                        text: `🔔 الموظف [${emp.name}] استهلك عُهدته بالكامل الآن في بند [${category}].`,
-                        time: timeNow
-                    });
-                    alert('تم الصرف، ورصيدك الآن أصبح صفر وتم إشعار الشركة.');
-                } else {
-                    alert('تم الصرف بنجاح وتحديث الرصيد المتبقي.');
+                updatedBudget -= amount;
+                if (updatedBudget === 0) {
+                    notifText = `🔔 الموظف [${currentEmpData.name}] استهلك عُهدته بالكامل الآن في بند [${category}].`;
                 }
             }
         }
 
-        employees[currentEmpIndex] = emp;
-        localStorage.setItem('employees', JSON.stringify(employees));
-        localStorage.setItem('notifications', JSON.stringify(notifications));
+        // 1. حفظ المصروف الجديد في الفايربيز تحت الموظف
+        await fetch(`${dbUrl}/employees/${currentEmpId}/expenses.json`, {
+            method: 'POST',
+            body: JSON.stringify(newExpense)
+        });
 
-        // تفعيل زر الواتساب وتجهيز الرسالة لو فيه مديونية أو الرصيد خلص
+        // 2. تحديث الرصيد الحالي للموظف في الفايربيز
+        await fetch(`${dbUrl}/employees/${currentEmpId}.json`, {
+            method: 'PATCH',
+            body: JSON.stringify({ budget: updatedBudget })
+        });
+
+        // 3. إرسال الإشعار للفايربيز إذا وُجد
+        if(notifText !== "") {
+            await fetch(`${dbUrl}/notifications.json`, {
+                method: 'POST',
+                body: JSON.stringify({ type: notifType, text: notifText, time: timeNow })
+            });
+        }
+
         if(waMessage !== "") {
             const encodedMessage = encodeURIComponent(waMessage);
             const whatsappBtn = document.getElementById('whatsappBtn');
@@ -286,23 +295,21 @@
             document.getElementById('whatsappBtn').style.display = 'none';
         }
 
+        alert('تم تسجيل عملية الصرف وتحديث البيانات بنجاح.');
         document.getElementById('expenseReason').value = '';
         document.getElementById('expenseAmount').value = '';
         updateDashboard();
     }
 
     function logout() {
-        currentEmpIndex = null;
+        currentEmpId = null;
+        currentEmpData = null;
         document.getElementById('loginName').value = '';
         document.getElementById('loginPass').value = '';
         document.getElementById('whatsappBtn').style.display = 'none';
         document.getElementById('dashboardSection').classList.add('hidden');
         document.getElementById('loginSection').classList.remove('hidden');
     }
-
-    window.addEventListener('storage', () => {
-        if (currentEmpIndex !== null) updateDashboard();
-    });
 </script>
 </body>
 </html>
